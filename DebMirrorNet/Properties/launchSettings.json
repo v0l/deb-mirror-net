@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "DebMirrorNet": {
+      "commandName": "Project",
+      "commandLineArgs": "http://mirror.0x.sg/ubuntu/ ubuntu"
+    }
+  }
+}

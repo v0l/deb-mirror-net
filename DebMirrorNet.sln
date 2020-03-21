@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.29911.84
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DebMirrorNet", "DebMirrorNet\DebMirrorNet.csproj", "{79E0C63B-23A0-4776-9D31-C1FE553D02AA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DebNet", "DebNet\DebNet.csproj", "{242B7B9D-96F7-48C9-B73D-34896D2F2250}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{79E0C63B-23A0-4776-9D31-C1FE553D02AA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{79E0C63B-23A0-4776-9D31-C1FE553D02AA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{79E0C63B-23A0-4776-9D31-C1FE553D02AA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{79E0C63B-23A0-4776-9D31-C1FE553D02AA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{242B7B9D-96F7-48C9-B73D-34896D2F2250}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{242B7B9D-96F7-48C9-B73D-34896D2F2250}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{242B7B9D-96F7-48C9-B73D-34896D2F2250}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{242B7B9D-96F7-48C9-B73D-34896D2F2250}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {9834AA21-E10B-496A-890F-6D0441985E57}
+	EndGlobalSection
+EndGlobal
