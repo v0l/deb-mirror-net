@@ -74,7 +74,7 @@ namespace DebNet
                 }
                 var ls = line.Split(':', 2);
                 var key = ls[0].Trim().ToLower();
-                var val = ls[1].Substring(1);
+                var val = ls[1].Length > 1 ? ls[1].Substring(1) : string.Empty; 
                 switch (key)
                 {
                     case "package":
