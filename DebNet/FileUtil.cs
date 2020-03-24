@@ -74,7 +74,6 @@ namespace DebNet
         {
             try
             {
-                Console.WriteLine($"Testing path: {path}");
                 if (path.IsFile)
                 {
                     return File.Exists(path.LocalPath);

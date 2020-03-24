@@ -215,5 +215,16 @@ namespace DebNet
                 return $"\n{line}";
             }
         }
+
+        public ReleaseFileInfo AsReleaseFile()
+        {
+            return new ReleaseFileInfo()
+            {
+                Size = Size,
+                SHA1 = SHA1,
+                SHA256 = SHA256,
+                MD5 = MD5
+            };
+        }
     }
 }

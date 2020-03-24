@@ -2,7 +2,7 @@
   "profiles": {
     "DebMirrorNet": {
       "commandName": "Project",
-      "commandLineArgs": "http://mirror.0x.sg/ubuntu/ ubuntu"
+      "commandLineArgs": "--source=http://mirror.0x.sg/ubuntu/ --cache-path=ubuntu --check-mode=MD5"
     }
   }
 }
