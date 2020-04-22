@@ -91,7 +91,7 @@ namespace DebNet
         /// </summary>
         /// <param name="relative">Relate path from this release info</param>
         /// <returns></returns>
-        public async ValueTask<Uri> GetUri(string relative)
+        public async ValueTask<Uri> GetUri(FileUtil fu, string relative)
         {
             /// Only ready by-hash when we are relative to remote source, Ie. not a file path
             if(AcquireByHash && !BasePath.IsFile && FileList.ContainsKey(relative))
@@ -100,7 +100,7 @@ namespace DebNet
                 foreach (var hf in checkHashFormats) 
                 {
                     var hashUrl = new Uri(BasePath, MakeByHashUri(relative, hf));
-                    if(await FileUtil.Exists(hashUrl))
+                    if(await fu.Exists(hashUrl))
                     {
                         return hashUrl;
                     }
@@ -191,7 +191,13 @@ namespace DebNet
                         }
                     case "date":
                         {
-                            if (DateTime.TryParseExact(val, "ddd, dd MMM yyyy HH:mm:ss %UTC", CultureInfo.CreateSpecificCulture("en-US"), DateTimeStyles.AssumeUniversal, out DateTime dt))
+                            string[] formats = new string[]
+                            {
+                                "ddd, dd MMM yyyy HH:mm:ss %UTC",
+                                "ddd, dd MMM yyyy  H:mm:ss %UTC"
+                            };
+
+                            if (DateTime.TryParseExact(val, formats, CultureInfo.CreateSpecificCulture("en-US"), DateTimeStyles.AssumeUniversal, out DateTime dt))
                             {
                                 ret.Date = dt.ToUniversalTime();
                             }

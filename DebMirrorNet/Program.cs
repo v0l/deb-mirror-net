@@ -38,11 +38,13 @@ namespace DebMirrorNet
         /// <param name="source">Mirror source url</param>
         /// <param name="cachePath">Local path to store cache</param>
         /// <param name="checkMode">Verify mode for local files</param>
-        /// <param name="bwLimit">Download bandwidth limit</param>
+        /// <param name="bwLimit">Download bandwidth limit (in Mbps)</param>
         /// <param name="dists">Distributions to mirror</param>
-        static async Task Main(string source, string cachePath, FileCheckMode checkMode = FileCheckMode.Size, long bwLimit = 0, string[] dists = null)
+        /// <param name="arch">Architectures to mirror</param>
+        /// <param name="verbose">Print more logs</param>
+        static async Task Main(string source, string cachePath, FileCheckMode checkMode = FileCheckMode.ReleaseDate, double bwLimit = 0d, List<string> dists = null, List<string> arch = null, bool verbose = false)
         {
-            if ((dists?.Length ?? 0) == 0)
+            if ((dists?.Count ?? 0) == 0)
             {
                 var distChannels = new string[]
                 {
@@ -52,7 +54,7 @@ namespace DebMirrorNet
                     "-security",
                     "-updates"
                 };
-                dists = new string[]
+                dists = new List<string>()
                 {
                     "bionic",
                     "disco",
@@ -61,190 +63,225 @@ namespace DebMirrorNet
                     "precise",
                     "trusty",
                     "xenial"
-                }.SelectMany(a => distChannels.Select(b => $"{a}{b}")).ToArray();
+                }.SelectMany(a => distChannels.Select(b => $"{a}{b}")).ToList();
             }
 
             using var loggerFactory = LoggerFactory.Create(builder =>
             {
-                builder.AddConsole();
+                builder.AddProvider(new CustomLoggerProvider()).SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information);
             });
 
             var logger = loggerFactory.CreateLogger<Program>();
-            var sem = new SemaphoreSlim(Environment.ProcessorCount);
-            logger.LogInformation($"Using {Environment.ProcessorCount} threads");
-
-            var repoUrl = new Uri(source);
-            var repo = new Repository(repoUrl);
-
-            var stat = new Stats()
+            using (logger.BeginScope("Init"))
             {
-                LastStart = DateTime.UtcNow
-            };
+                var sem = new SemaphoreSlim(Environment.ProcessorCount);
+                logger.LogDebug($"Using {Environment.ProcessorCount} threads");
 
-            foreach (var distChan in dists)
-            {
-                var riStream = await repo.GetReleaseInfo(distChan);
-                if (riStream.HasValue)
+                var repoUrl = new Uri(source);
+                var repo = new Repository(logger, repoUrl);
+                var fu = new FileUtil(logger);
+
+                var stat = new Stats()
                 {
-                    var releaseFilePath = Path.Combine(cachePath, riStream.Value.Filename);
-                    await CopyStreamToFile(releaseFilePath, riStream.Value.Stream, bwLimit);
-                    var releaseInfo = await ReleaseInfo.ReadFromStream(new Uri(repoUrl, riStream.Value.Filename), new StreamReader(releaseFilePath));
+                    LastStart = DateTime.UtcNow
+                };
 
-                    logger.LogInformation($"Cloning: {releaseInfo.Description}");
-
-                    if (!stat.Dists.ContainsKey(distChan))
+                foreach (var distChan in dists)
+                {
+                    using (logger.BeginScope(distChan))
                     {
-                        stat.Dists.Add(distChan, new DistStats()
+                        var riStream = await repo.GetReleaseInfo(distChan);
+                        if (riStream.HasValue)
                         {
-                            ReleaseDate = releaseInfo.Date
-                        });
-                    }
-
-                    //Clone contents
-                    foreach (var arch in releaseInfo.Architectures)
-                    {
-                        foreach (var contentFile in repo.GetCompressedOrderdFiles(releaseInfo, $"Content-{arch}"))
-                        {
-                            await sem.WaitAsync();
-                            _ = Task.Run(async () =>
+                            var releaseTemp = Path.GetTempFileName();
+                            var releaseFilePath = Path.Combine(cachePath, riStream.Value.Filename);
+                            
+                            await CopyStreamToFile(releaseTemp, riStream.Value.Stream, bwLimit * MBit);
+                            ReleaseInfo releaseInfo;
+                            using (var srTemp = new StreamReader(releaseTemp)) 
                             {
-                                var contentPath = $"dists/{distChan}/{releaseInfo.MakeByHashUri(contentFile.Key) ?? contentFile.Key}";
-                                var outPath = Path.Combine(cachePath, contentPath);
-                                var fetch = true;
-                                if (File.Exists(outPath))
-                                {
-                                    fetch = !await CheckFile(outPath, contentFile.Value, checkMode);
-                                    logger.LogInformation($"[{distChan}][{arch}] [{(!fetch ? "✓" : "🗙")}] {contentFile.Key}");
-                                }
-
-                                if (fetch)
-                                {
-                                    var contentStream = await FileUtil.GetStream(new Uri(repoUrl, contentPath), Path.GetExtension(contentFile.Key), false);
-                                    if (contentStream != null)
-                                    {
-                                        logger.LogInformation($"[{distChan}][{arch}] [↓] {contentFile.Key}");
-                                        await CopyStreamToFile(outPath, contentStream, bwLimit);
-                                        if (!await CheckFile(outPath, contentFile.Value, checkMode))
-                                        {
-                                            logger.LogError($"[Corrupt] {contentFile.Key}");
-                                        }
-                                    }
-                                }
-                                sem.Release();
-                            });
-
-                        }
-                    }
-
-                    //copy translations
-                    foreach (var comp in releaseInfo.Components)
-                    {
-                        foreach (var txFile in repo.GetCompressedOrderdFiles(releaseInfo, $"{comp}/i18n"))
-                        {
-                            await sem.WaitAsync();
-                            _ = Task.Run(async () =>
-                            {
-                                    //http://archive.ubuntu.com/ubuntu/dists/bionic/main/i18n/
-                                    var contentPath = $"dists/{distChan}/{releaseInfo.MakeByHashUri(txFile.Key) ?? txFile.Key}";
-                                var outPath = Path.Combine(cachePath, contentPath);
-                                var fetch = true;
-                                if (File.Exists(outPath))
-                                {
-                                    fetch = !await CheckFile(outPath, txFile.Value, checkMode);
-                                    logger.LogInformation($"[{distChan}] [{(!fetch ? "✓" : "🗙")}] {txFile.Key}");
-                                }
-
-                                if (fetch)
-                                {
-                                    var contentStream = await FileUtil.GetStream(new Uri(repoUrl, contentPath), Path.GetExtension(txFile.Key), false);
-                                    if (contentStream != null)
-                                    {
-                                        logger.LogInformation($"[{distChan}][{comp}] [↓] {txFile.Key}");
-                                        await CopyStreamToFile(outPath, contentStream, bwLimit);
-                                        if (!await CheckFile(outPath, txFile.Value, checkMode))
-                                        {
-                                            logger.LogError($"[Corrupt] {txFile.Key}");
-                                        }
-                                    }
-                                }
-                                sem.Release();
-                            });
-                        }
-                    }
-
-                    var lastStatWrite = DateTime.Now;
-                    //Read pacakges
-                    foreach (var arch in releaseInfo.Architectures)
-                    {
-                        foreach (var comp in releaseInfo.Components)
-                        {
-                            if (!stat.Dists[distChan].Components.ContainsKey(comp))
-                            {
-                                stat.Dists[distChan].Components.Add(comp, new CompStats());
+                                releaseInfo = await ReleaseInfo.ReadFromStream(new Uri(repoUrl, riStream.Value.Filename), srTemp);
                             }
 
-                            var pkgIndexStream = await repo.GetPackageIndex(releaseInfo, comp, arch, false);
-                            if (pkgIndexStream.HasValue)
+                            if (!stat.Dists.ContainsKey(distChan))
                             {
-                                var outPath = Path.Combine(cachePath, $"dists/{distChan}/{releaseInfo.MakeByHashUri(pkgIndexStream.Value.Filename) ?? pkgIndexStream.Value.Filename}");
-                                await CopyStreamToFile(outPath, pkgIndexStream.Value.Stream, bwLimit);
-
-                                //read the package index
-                                var pkgIndex = await FileUtil.GetStream(new Uri(Path.GetFullPath(outPath)), Path.GetExtension(pkgIndexStream.Value.Filename));
-                                if (pkgIndex != null)
+                                stat.Dists.Add(distChan, new DistStats()
                                 {
-                                    await foreach (var pkg in repo.ReadPackageIndex(pkgIndex))
-                                    {
-                                        var compStat = stat.Dists[distChan].Components[comp];
+                                    ReleaseDate = releaseInfo.Date
+                                });
+                            }
 
+                            //Check for updates if release cache already exists
+                            if (File.Exists(releaseFilePath) && checkMode == FileCheckMode.ReleaseDate)
+                            {
+                                using var srOld = new StreamReader(releaseFilePath);
+                                var oldReleaseInfo = await ReleaseInfo.ReadFromStream(new Uri(repoUrl, riStream.Value.Filename), srOld);
+                                if (oldReleaseInfo.Date == releaseInfo.Date)
+                                {
+                                    logger.LogInformation($"{distChan} is up to date.");
+                                    continue;
+                                }
+                            }
+
+                            logger.LogInformation($"Updating: {distChan}");
+                            using (logger.BeginScope("Contents"))
+                            {
+                                //Clone contents
+                                foreach (var arc in (arch ?? releaseInfo.Architectures))
+                                {
+                                    foreach (var contentFile in repo.GetCompressedOrderdFiles(releaseInfo, $"Content-{arc}"))
+                                    {
                                         await sem.WaitAsync();
                                         _ = Task.Run(async () =>
-                                          {
-                                              var pkgOutPath = Path.Combine(cachePath, pkg.Filename);
-                                              var fetch = true;
-                                              if (File.Exists(pkgOutPath))
-                                              {
-                                                  fetch = !await CheckFile(pkgOutPath, pkg.AsReleaseFile(), checkMode);
-                                                  logger.LogInformation($"[{distChan}][{arch}][{comp}] [{(!fetch ? "✓" : "🗙")}] {pkg.Name}");
-                                              }
+                                        {
+                                            var contentPath = $"dists/{distChan}/{releaseInfo.MakeByHashUri(contentFile.Key) ?? contentFile.Key}";
+                                            var outPath = Path.Combine(cachePath, contentPath);
+                                            var fetch = !await CheckFile(outPath, contentFile.Value, checkMode);
+                                            logger.LogDebug($"[{distChan}][{arc}] [{(!fetch ? "✓" : "🗙")}] {contentFile.Key}");
 
-                                              if (fetch)
-                                              {
-                                                  var pkgUrl = new Uri(repoUrl, pkg.Filename);
-                                                  logger.LogInformation($"[{distChan}][{arch}][{comp}] [↓] {pkg.Name}");
-                                                  var pkgStream = await FileUtil.GetStream(pkgUrl, getDecompressed: false);
-                                                  if (pkgStream != null)
-                                                  {
-                                                      await CopyStreamToFile(pkgOutPath, pkgStream, bwLimit);
-                                                      if (!await CheckFile(pkgOutPath, pkg.AsReleaseFile(), checkMode))
-                                                      {
-                                                          logger.LogError($"[Corrupt] {pkg.Name}");
-                                                      }
-                                                  }
-                                              }
-                                              sem.Release();
-                                              compStat.Packages++;
-                                              compStat.Size += pkg.Size;
-                                              if ((DateTime.Now - lastStatWrite).TotalSeconds >= 5)
-                                              {
-                                                  await WriteStat(cachePath, stat);
-                                                  lastStatWrite = DateTime.Now;
-                                              }
-                                          });
+                                            if (fetch)
+                                            {
+                                                var contentStream = await fu.GetStream(new Uri(repoUrl, contentPath), Path.GetExtension(contentFile.Key), false);
+                                                if (contentStream != null)
+                                                {
+                                                    logger.LogInformation($"[{distChan}][{arc}] [↓] {contentFile.Key}");
+                                                    await CopyStreamToFile(outPath, contentStream, bwLimit * MBit);
+                                                    if (!await CheckFile(outPath, contentFile.Value, checkMode))
+                                                    {
+                                                        logger.LogError($"[Corrupt] {contentFile.Key}");
+                                                    }
+                                                }
+                                            }
+                                            sem.Release();
+                                        });
+
                                     }
                                 }
                             }
+
+                            using (logger.BeginScope("Translations"))
+                            {
+                                //copy translations
+                                foreach (var comp in releaseInfo.Components)
+                                {
+                                    foreach (var txFile in repo.GetCompressedOrderdFiles(releaseInfo, $"{comp}/i18n"))
+                                    {
+                                        await sem.WaitAsync();
+                                        _ = Task.Run(async () =>
+                                        {
+                                            //http://archive.ubuntu.com/ubuntu/dists/bionic/main/i18n/
+                                            var contentPath = $"dists/{distChan}/{releaseInfo.MakeByHashUri(txFile.Key) ?? txFile.Key}";
+                                            var outPath = Path.Combine(cachePath, contentPath);
+                                            var fetch = !await CheckFile(outPath, txFile.Value, checkMode);
+                                            logger.LogDebug($"[{distChan}] [{(!fetch ? "✓" : "🗙")}] {txFile.Key}");
+
+                                            if (fetch)
+                                            {
+                                                var contentStream = await fu.GetStream(new Uri(repoUrl, contentPath), Path.GetExtension(txFile.Key), false);
+                                                if (contentStream != null)
+                                                {
+                                                    logger.LogInformation($"[{distChan}][{comp}] [↓] {txFile.Key}");
+                                                    await CopyStreamToFile(outPath, contentStream, bwLimit * MBit);
+                                                    if (!await CheckFile(outPath, txFile.Value, checkMode))
+                                                    {
+                                                        logger.LogError($"[Corrupt] {txFile.Key}");
+                                                    }
+                                                }
+                                            }
+                                            sem.Release();
+                                        });
+                                    }
+                                }
+                            }
+
+                            var lastStatWrite = DateTime.Now;
+                            //Read pacakges
+                            foreach (var arc in (arch ?? releaseInfo.Architectures))
+                            {
+                                foreach (var comp in releaseInfo.Components)
+                                {
+                                    using (logger.BeginScope($"{distChan}/{arc}/{comp}"))
+                                    {
+                                        if (!stat.Dists[distChan].Components.ContainsKey(comp))
+                                        {
+                                            stat.Dists[distChan].Components.Add(comp, new CompStats());
+                                        }
+
+                                        var pkgIndexStream = await repo.GetPackageIndex(releaseInfo, comp, arc, false);
+                                        if (pkgIndexStream.HasValue)
+                                        {
+                                            var outPath = Path.Combine(cachePath, $"dists/{distChan}/{releaseInfo.MakeByHashUri(pkgIndexStream.Value.Filename) ?? pkgIndexStream.Value.Filename}");
+                                            await CopyStreamToFile(outPath, pkgIndexStream.Value.Stream, bwLimit * MBit);
+
+                                            //read the package index
+                                            var pkgIndex = await fu.GetStream(new Uri(Path.GetFullPath(outPath)), Path.GetExtension(pkgIndexStream.Value.Filename));
+                                            if (pkgIndex != null)
+                                            {
+                                                await foreach (var pkg in repo.ReadPackageIndex(pkgIndex))
+                                                {
+                                                    var compStat = stat.Dists[distChan].Components[comp];
+
+                                                    await sem.WaitAsync();
+                                                    _ = Task.Run(async () =>
+                                                      {
+                                                          var pkgOutPath = Path.Combine(cachePath, pkg.Filename);
+                                                          var fetch = !await CheckFile(pkgOutPath, pkg.AsReleaseFile(), checkMode);
+                                                            logger.LogDebug($"[{distChan}][{arc}][{comp}] [{(!fetch ? "✓" : "🗙")}] {pkg.Name}");
+
+                                                          if (fetch)
+                                                          {
+                                                              var pkgUrl = new Uri(repoUrl, pkg.Filename);
+                                                              logger.LogInformation($"[{distChan}][{arc}][{comp}] [↓] {pkg.Name}");
+                                                              var pkgStream = await fu.GetStream(pkgUrl, getDecompressed: false);
+                                                              if (pkgStream != null)
+                                                              {
+                                                                  await CopyStreamToFile(pkgOutPath, pkgStream, bwLimit * MBit);
+                                                                  if (!await CheckFile(pkgOutPath, pkg.AsReleaseFile(), checkMode))
+                                                                  {
+                                                                      logger.LogError($"[Corrupt] {pkg.Name}");
+                                                                  }
+                                                              }
+                                                          }
+
+                                                          sem.Release();
+                                                          compStat.Packages++;
+                                                          compStat.Size += pkg.Size;
+                                                          if ((DateTime.Now - lastStatWrite).TotalSeconds >= 5)
+                                                          {
+                                                              await WriteStat(cachePath, stat);
+                                                              lastStatWrite = DateTime.Now;
+                                                          }
+                                                      });
+                                                }
+                                            }
+                                        }
+                                        else
+                                        {
+                                            logger.LogError($"Cant open PackageIndex: {arc}/{comp}");
+                                        }
+                                    }
+                                }
+                            }
+
+                            // extra check on dir here
+                            // CopyStreamToFile normally does this check, but for first run its needed
+                            var releaseDir = Path.GetDirectoryName(releaseFilePath);
+                            if (!Directory.Exists(releaseDir))
+                            {
+                                Directory.CreateDirectory(releaseDir);
+                            }
+                            File.Move(releaseTemp, releaseFilePath, true);
+                        }
+                        else
+                        {
+                            logger.LogError($"Dist not found: {distChan}");
                         }
                     }
                 }
-                else
-                {
-                    logger.LogError($"Dist not found: {distChan}");
-                }
-            }
 
-            //write repo lastly
-            await WriteStat(cachePath, stat, false);
+                //write repo lastly
+                await WriteStat(cachePath, stat, false);
+            }
         }
 
         static async Task WriteStat(string cacheRoot, Stats s, bool running = true)
@@ -257,7 +294,7 @@ namespace DebMirrorNet
             await File.WriteAllTextAsync(Path.Combine(cacheRoot, "repo.json"), JsonConvert.SerializeObject(s, Formatting.Indented));
         }
 
-        static async Task CopyStreamToFile(string path, Stream stream, long bwLimit = 0)
+        static async Task CopyStreamToFile(string path, Stream stream, double bwLimit = 0)
         {
             var dirName = Path.GetDirectoryName(path);
             if (!Directory.Exists(dirName))
@@ -293,58 +330,62 @@ namespace DebMirrorNet
 
         static async Task<bool> CheckFile(string path, ReleaseFileInfo info, FileCheckMode mode = FileCheckMode.SHA256)
         {
-            Func<string, HashAlgorithm, Task<string>> fnHashFile = async (path, algo) =>
+            if (File.Exists(path))
             {
-                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
-                var data = new byte[1024 * 16]; //read 16k at a time
-                while (true)
+                Func<string, HashAlgorithm, Task<string>> fnHashFile = async (path, algo) =>
                 {
-                    var rlen = await fs.ReadAsync(data, 0, data.Length);
-                    if (rlen == 0)
+                    using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
+                    var data = new byte[1024 * 16]; //read 16k at a time
+                while (true)
                     {
-                        algo.TransformFinalBlock(data, 0, rlen);
-                        break;
+                        var rlen = await fs.ReadAsync(data, 0, data.Length);
+                        if (rlen == 0)
+                        {
+                            algo.TransformFinalBlock(data, 0, rlen);
+                            break;
+                        }
+                        else
+                        {
+                            algo.TransformBlock(data, 0, rlen, data, 0);
+                        }
                     }
-                    else
-                    {
-                        algo.TransformBlock(data, 0, rlen, data, 0);
-                    }
-                }
-                return BitConverter.ToString(algo.Hash).Replace("-", "").ToLower();
-            };
+                    return BitConverter.ToString(algo.Hash).Replace("-", "").ToLower();
+                };
 
-            //fallback
-            if (string.IsNullOrEmpty(info.SHA256))
-            {
-                mode = FileCheckMode.SHA1;
-            }
-            if (string.IsNullOrEmpty(info.SHA1))
-            {
-                mode = FileCheckMode.MD5;
-            }
-            if (string.IsNullOrEmpty(info.MD5))
-            {
-                mode = FileCheckMode.Size;
-            }
-            switch (mode)
-            {
-                case FileCheckMode.Size:
-                    {
-                        var fi = new FileInfo(path);
-                        return fi.Length == info.Size;
-                    }
-                case FileCheckMode.MD5:
-                    {
-                        return info.MD5 == await fnHashFile(path, MD5.Create());
-                    }
-                case FileCheckMode.SHA1:
-                    {
-                        return info.SHA1 == await fnHashFile(path, SHA1.Create());
-                    }
-                case FileCheckMode.SHA256:
-                    {
-                        return info.SHA256 == await fnHashFile(path, SHA256.Create());
-                    }
+                //fallback
+                if (mode == FileCheckMode.SHA256 && string.IsNullOrEmpty(info.SHA256))
+                {
+                    mode = FileCheckMode.SHA1;
+                }
+                if (mode == FileCheckMode.SHA1 && string.IsNullOrEmpty(info.SHA1))
+                {
+                    mode = FileCheckMode.MD5;
+                }
+                if (mode == FileCheckMode.MD5 && string.IsNullOrEmpty(info.MD5))
+                {
+                    mode = FileCheckMode.Size;
+                }
+                switch (mode)
+                {
+                    case FileCheckMode.ReleaseDate:
+                    case FileCheckMode.Size:
+                        {
+                            var fi = new FileInfo(path);
+                            return fi.Length == info.Size;
+                        }
+                    case FileCheckMode.MD5:
+                        {
+                            return info.MD5 == await fnHashFile(path, MD5.Create());
+                        }
+                    case FileCheckMode.SHA1:
+                        {
+                            return info.SHA1 == await fnHashFile(path, SHA1.Create());
+                        }
+                    case FileCheckMode.SHA256:
+                        {
+                            return info.SHA256 == await fnHashFile(path, SHA256.Create());
+                        }
+                }
             }
             return false;
         }
@@ -352,6 +393,7 @@ namespace DebMirrorNet
 
     internal enum FileCheckMode
     {
+        ReleaseDate,
         Size,
         MD5,
         SHA1,

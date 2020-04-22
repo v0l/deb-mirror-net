@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Microsoft.Extensions.Logging;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -30,15 +31,20 @@ namespace DebNet
     public class Repository : IRepository
     {
         private Uri RootUrl { get; set; }
+        private ILogger Logger { get; }
+        private FileUtil FileUtil { get; }
 
         private Uri CombinePath(string path)
         {
             return new Uri(RootUrl, path);
         }
 
-        public Repository(Uri rootPath) 
+        public Repository(ILogger log, Uri rootPath) 
         {
+            Logger = log;
             RootUrl = rootPath;
+
+            FileUtil = new FileUtil(log);
         }
 
         public async Task<ReleaseFileStream?> GetReleaseInfo(string dist, bool getDecompressed = true)
@@ -60,7 +66,7 @@ namespace DebNet
                 }
                 catch(Exception ex)
                 {
-                    Console.WriteLine(ex);
+                    Logger.LogError(ex, $"Failed to get release {dist}");
                 }
             }
             return null;
@@ -177,16 +183,15 @@ namespace DebNet
             var orderedContents = GetCompressedOrderdFiles(ri, path);
             foreach (var testPath in orderedContents)
             {
-                var url = await ri.GetUri(testPath.Key);
+                var url = await ri.GetUri(FileUtil, testPath.Key);
                 Stream stream = null;
                 try
                 {
                     stream = await FileUtil.GetStream(url, Path.GetExtension(testPath.Key), getDecompressed);
                     if (stream == null) return null;
                 }
-                catch (Exception ex)
+                catch
                 {
-                    Console.WriteLine(ex);
                     continue;
                 }
                 
