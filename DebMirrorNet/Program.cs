@@ -57,9 +57,9 @@ namespace DebMirrorNet
                 dists = new List<string>()
                 {
                     "bionic",
-                    "disco",
                     "eoan",
                     "focal",
+                    "groovy",
                     "precise",
                     "trusty",
                     "xenial"
