@@ -56,13 +56,15 @@ namespace DebMirrorNet
                 };
                 dists = new List<string>()
                 {
-                    "bionic",
-                    "eoan",
-                    "focal",
-                    "groovy",
-                    "precise",
-                    "trusty",
-                    "xenial"
+                    "groovy", /* 20.10 */
+                    "focal", /* 20.04 */
+                    "eoan", /* 19.10 */
+                    //"disco", /* 19.04 */
+                    //"cosmic", /* 18.10 */
+                    "bionic", /* 18.04 */
+                    "xenial", /* 16.04 */
+                    "trusty", /* 14.04 */
+                    "precise", /* 12.04 */
                 }.SelectMany(a => distChannels.Select(b => $"{a}{b}")).ToList();
             }
 
@@ -155,6 +157,40 @@ namespace DebMirrorNet
                                             sem.Release();
                                         });
 
+                                    }
+                                }
+                            }
+
+                            using (logger.BeginScope("Commands"))
+                            {
+                                //copy commands
+                                foreach (var comp in releaseInfo.Components)
+                                {
+                                    foreach (var txFile in repo.GetCompressedOrderdFiles(releaseInfo, $"{comp}/cnf"))
+                                    {
+                                        await sem.WaitAsync();
+                                        _ = Task.Run(async () =>
+                                        {
+                                            var contentPath = $"dists/{distChan}/{releaseInfo.MakeByHashUri(txFile.Key) ?? txFile.Key}";
+                                            var outPath = Path.Combine(cachePath, contentPath);
+                                            var fetch = !await CheckFile(outPath, txFile.Value, checkMode);
+                                            logger.LogDebug($"[{distChan}] [{(!fetch ? "✓" : "🗙")}] {txFile.Key}");
+
+                                            if (fetch)
+                                            {
+                                                var contentStream = await fu.GetStream(new Uri(repoUrl, contentPath), Path.GetExtension(txFile.Key), false);
+                                                if (contentStream != null)
+                                                {
+                                                    logger.LogInformation($"[{distChan}][{comp}] [↓] {txFile.Key}");
+                                                    await CopyStreamToFile(outPath, contentStream, bwLimit * MBit);
+                                                    if (!await CheckFile(outPath, txFile.Value, checkMode))
+                                                    {
+                                                        logger.LogError($"[Corrupt] {txFile.Key}");
+                                                    }
+                                                }
+                                            }
+                                            sem.Release();
+                                        });
                                     }
                                 }
                             }
