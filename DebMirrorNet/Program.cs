@@ -97,10 +97,10 @@ namespace DebMirrorNet
                         {
                             var releaseTemp = Path.GetTempFileName();
                             var releaseFilePath = Path.Combine(cachePath, riStream.Value.Filename);
-                            
+
                             await CopyStreamToFile(releaseTemp, riStream.Value.Stream, bwLimit * MBit);
                             ReleaseInfo releaseInfo;
-                            using (var srTemp = new StreamReader(releaseTemp)) 
+                            using (var srTemp = new StreamReader(releaseTemp))
                             {
                                 releaseInfo = await ReleaseInfo.ReadFromStream(new Uri(repoUrl, riStream.Value.Filename), srTemp);
                             }
@@ -161,6 +161,29 @@ namespace DebMirrorNet
                                 }
                             }
 
+                            Func<string, KeyValuePair<string, ReleaseFileInfo>, Task> fnCloneFiles = async (comp, txFile) =>
+                            {
+                                var contentPath = $"dists/{distChan}/{releaseInfo.MakeByHashUri(txFile.Key) ?? txFile.Key}";
+                                var outPath = Path.Combine(cachePath, contentPath);
+                                var fetch = !await CheckFile(outPath, txFile.Value, checkMode);
+                                logger.LogDebug($"[{distChan}] [{(!fetch ? "✓" : "🗙")}] {txFile.Key}");
+
+                                if (fetch)
+                                {
+                                    var contentStream = await fu.GetStream(new Uri(repoUrl, contentPath), Path.GetExtension(txFile.Key), false);
+                                    if (contentStream != null)
+                                    {
+                                        logger.LogInformation($"[{distChan}][{comp}] [↓] {txFile.Key}");
+                                        await CopyStreamToFile(outPath, contentStream, bwLimit * MBit);
+                                        if (!await CheckFile(outPath, txFile.Value, checkMode))
+                                        {
+                                            logger.LogError($"[Corrupt] {txFile.Key}");
+                                        }
+                                    }
+                                }
+                                sem.Release();
+                            };
+
                             using (logger.BeginScope("Commands"))
                             {
                                 //copy commands
@@ -169,32 +192,24 @@ namespace DebMirrorNet
                                     foreach (var txFile in repo.GetCompressedOrderdFiles(releaseInfo, $"{comp}/cnf"))
                                     {
                                         await sem.WaitAsync();
-                                        _ = Task.Run(async () =>
-                                        {
-                                            var contentPath = $"dists/{distChan}/{releaseInfo.MakeByHashUri(txFile.Key) ?? txFile.Key}";
-                                            var outPath = Path.Combine(cachePath, contentPath);
-                                            var fetch = !await CheckFile(outPath, txFile.Value, checkMode);
-                                            logger.LogDebug($"[{distChan}] [{(!fetch ? "✓" : "🗙")}] {txFile.Key}");
-
-                                            if (fetch)
-                                            {
-                                                var contentStream = await fu.GetStream(new Uri(repoUrl, contentPath), Path.GetExtension(txFile.Key), false);
-                                                if (contentStream != null)
-                                                {
-                                                    logger.LogInformation($"[{distChan}][{comp}] [↓] {txFile.Key}");
-                                                    await CopyStreamToFile(outPath, contentStream, bwLimit * MBit);
-                                                    if (!await CheckFile(outPath, txFile.Value, checkMode))
-                                                    {
-                                                        logger.LogError($"[Corrupt] {txFile.Key}");
-                                                    }
-                                                }
-                                            }
-                                            sem.Release();
-                                        });
+                                        _ = fnCloneFiles(comp, txFile);
                                     }
                                 }
                             }
 
+                            using (logger.BeginScope("DEP11"))
+                            {
+                                //copy dep11
+                                foreach (var comp in releaseInfo.Components)
+                                {
+                                    foreach (var txFile in repo.GetCompressedOrderdFiles(releaseInfo, $"{comp}/dep11"))
+                                    {
+                                        await sem.WaitAsync();
+                                        _ = fnCloneFiles(comp, txFile);
+                                    }
+                                }
+                            }
+                            
                             using (logger.BeginScope("Translations"))
                             {
                                 //copy translations
@@ -203,29 +218,7 @@ namespace DebMirrorNet
                                     foreach (var txFile in repo.GetCompressedOrderdFiles(releaseInfo, $"{comp}/i18n"))
                                     {
                                         await sem.WaitAsync();
-                                        _ = Task.Run(async () =>
-                                        {
-                                            //http://archive.ubuntu.com/ubuntu/dists/bionic/main/i18n/
-                                            var contentPath = $"dists/{distChan}/{releaseInfo.MakeByHashUri(txFile.Key) ?? txFile.Key}";
-                                            var outPath = Path.Combine(cachePath, contentPath);
-                                            var fetch = !await CheckFile(outPath, txFile.Value, checkMode);
-                                            logger.LogDebug($"[{distChan}] [{(!fetch ? "✓" : "🗙")}] {txFile.Key}");
-
-                                            if (fetch)
-                                            {
-                                                var contentStream = await fu.GetStream(new Uri(repoUrl, contentPath), Path.GetExtension(txFile.Key), false);
-                                                if (contentStream != null)
-                                                {
-                                                    logger.LogInformation($"[{distChan}][{comp}] [↓] {txFile.Key}");
-                                                    await CopyStreamToFile(outPath, contentStream, bwLimit * MBit);
-                                                    if (!await CheckFile(outPath, txFile.Value, checkMode))
-                                                    {
-                                                        logger.LogError($"[Corrupt] {txFile.Key}");
-                                                    }
-                                                }
-                                            }
-                                            sem.Release();
-                                        });
+                                        _ = fnCloneFiles(comp, txFile);
                                     }
                                 }
                             }
@@ -262,7 +255,7 @@ namespace DebMirrorNet
                                                       {
                                                           var pkgOutPath = Path.Combine(cachePath, pkg.Filename);
                                                           var fetch = !await CheckFile(pkgOutPath, pkg.AsReleaseFile(), checkMode);
-                                                            logger.LogDebug($"[{distChan}][{arc}][{comp}] [{(!fetch ? "✓" : "🗙")}] {pkg.Name}");
+                                                          logger.LogDebug($"[{distChan}][{arc}][{comp}] [{(!fetch ? "✓" : "🗙")}] {pkg.Name}");
 
                                                           if (fetch)
                                                           {
@@ -372,7 +365,7 @@ namespace DebMirrorNet
                 {
                     using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
                     var data = new byte[1024 * 16]; //read 16k at a time
-                while (true)
+                    while (true)
                     {
                         var rlen = await fs.ReadAsync(data, 0, data.Length);
                         if (rlen == 0)
