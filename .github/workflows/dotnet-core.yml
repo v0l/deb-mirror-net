@@ -17,7 +17,7 @@ jobs:
       run: dotnet restore
     - name: Build
       run: dotnet build --configuration Release --no-restore
-    - name: Download a Build Artifact
-      uses: actions/download-artifact@v2.0.5
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v2.1.4
       with:
         path: DebMirrorNet/Release
