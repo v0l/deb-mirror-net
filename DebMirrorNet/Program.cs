@@ -299,7 +299,9 @@ namespace DebMirrorNet
                             {
                                 Directory.CreateDirectory(releaseDir);
                             }
-                            File.Move(releaseTemp, releaseFilePath, true);
+                            //File.Move(releaseTemp, releaseFilePath, true);
+                            await File.WriteAllBytesAsync(releaseFilePath, await File.ReadAllBytesAsync(releaseTemp));
+                            
                         }
                         else
                         {
