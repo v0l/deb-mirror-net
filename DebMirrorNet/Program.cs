@@ -56,15 +56,16 @@ namespace DebMirrorNet
                 };
                 dists = new List<string>()
                 {
+                    "hirsute", /* 21.04 */
                     "groovy", /* 20.10 */
                     "focal", /* 20.04 */
-                    "eoan", /* 19.10 */
+                    //"eoan", /* 19.10 */
                     //"disco", /* 19.04 */
                     //"cosmic", /* 18.10 */
                     "bionic", /* 18.04 */
                     "xenial", /* 16.04 */
                     "trusty", /* 14.04 */
-                    "precise", /* 12.04 */
+                    //"precise", /* 12.04 */
                 }.SelectMany(a => distChannels.Select(b => $"{a}{b}")).ToList();
             }
 
