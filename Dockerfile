@@ -10,6 +10,7 @@ RUN dotnet publish -c release -o /app --no-restore
 
 # final stage/image
 FROM mcr.microsoft.com/dotnet/core/runtime:3.1
+LABEL org.opencontainers.image.source https://github.com/v0l/DebMirrorNet
 WORKDIR /app
 COPY --from=build /app .
 ENTRYPOINT ["dotnet", "DebMirrorNet.dll"]
